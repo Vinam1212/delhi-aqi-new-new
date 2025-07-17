@@ -31,10 +31,6 @@ df = load_data()
 
 # === Sidebar Filters ===
 st.sidebar.title("📍 Filters")
-locations = sorted(df["location_name"].unique())
-selected_location = st.sidebar.selectbox("Select Location", locations)
-
-df = df[df["location_name"] == selected_location]
 
 pollutants = sorted(df["parameter"].unique())
 selected_pollutants = st.sidebar.multiselect("Select Pollutants", pollutants, default=pollutants)
@@ -116,3 +112,4 @@ st.download_button(
     file_name="filtered_aqi_data.csv",
     mime="text/csv"
 )
+
