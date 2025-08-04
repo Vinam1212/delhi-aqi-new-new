@@ -1,75 +1,115 @@
 import streamlit as st
 import requests
 import pandas as pd
-from datetime import datetime
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 # Page setup
 st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
-st.title("🟢 Delhi AQI Dashboard – Live Data from OpenAQ")
-st.caption("Created by Vinam Jain | Modern School, Barakhamba Road")
 
+# OpenAQ API Key
 API_KEY = "b5e603105ac2e6a269e65dd8b3659d91eadc422e602b8becd58c5ee70b867907"
-HEADERS = {"Accept": "application/json", "X-API-Key": API_KEY}
+HEADERS = {"X-API-Key": API_KEY}
 
-@st.cache_data(ttl=600)
-def fetch_locations():
+# Sidebar theme switch
+st.sidebar.title("⚙️ Settings")
+theme = st.sidebar.radio("🌗 Theme Mode", ["Light", "Dark"])
+if theme == "Dark":
+    st.markdown("""
+        <style>
+        body, .stApp {background-color:#111; color:#fff;}
+        .css-1d391kg {background-color:#222;}
+        </style>
+    """, unsafe_allow_html=True)
+
+st.title("🌆 Delhi AQI Dashboard – Live Data")
+st.markdown("Created by **Vinam Jain**, Modern School Barakhamba Road")
+
+@st.cache_data(ttl=3600)
+def get_delhi_locations():
     url = "https://api.openaq.org/v2/locations"
-    params = {"city": "Delhi", "country": "IN", "limit": 500}
-    resp = requests.get(url, headers=HEADERS, params=params)
-    if resp.status_code == 200:
-        df = pd.DataFrame(resp.json().get("results", []))
-        return sorted(df["name"].dropna().unique())
-    return []
+    params = {
+        "country": "IN",
+        "city": "Delhi",
+        "limit": 100,
+        "sort": "desc"
+    }
+    r = requests.get(url, headers=HEADERS, params=params)
+    results = r.json().get("results", [])
+    return sorted([loc["name"] for loc in results if "name" in loc])
 
 @st.cache_data(ttl=600)
-def fetch_measurements(location):
+def get_station_data(station_name):
     url = "https://api.openaq.org/v2/measurements"
     params = {
         "city": "Delhi",
-        "country": "IN",
-        "location": location,
-        "limit": 500,
+        "location": station_name,
+        "limit": 1000,
         "sort": "desc",
         "order_by": "datetime"
     }
-    resp = requests.get(url, headers=HEADERS, params=params)
-    if resp.status_code == 200:
-        df = pd.DataFrame(resp.json().get("results", []))
-        if not df.empty:
-            df["datetime"] = pd.to_datetime(df["date"]["utc"])
-            return df[["parameter", "value", "unit", "datetime"]]
-    return pd.DataFrame()
+    r = requests.get(url, headers=HEADERS, params=params)
+    data = r.json().get("results", [])
+    df = pd.DataFrame(data)
+    if df.empty:
+        return pd.DataFrame()
+    df["datetime"] = pd.to_datetime(df["date"].apply(lambda d: d["utc"]))
+    df["parameter"] = df["parameter"].str.lower()
+    return df[["datetime", "parameter", "value"]]
 
-locations = fetch_locations()
+# UI: Station Selector
+locations = get_delhi_locations()
 if not locations:
-    st.error("⚠️ No Delhi locations loaded. API key or network issue.")
+    st.error("⚠️ Could not load locations. Check API key or try later.")
     st.stop()
 
-selected = st.sidebar.selectbox("📍 Select Monitoring Location", locations)
-df = fetch_measurements(selected)
-if df.empty:
-    st.warning(f"No recent data for {selected}. Try another location.")
+selected_station = st.sidebar.selectbox("📍 Select Station", locations)
+data = get_station_data(selected_station)
+
+if data.empty:
+    st.warning("No recent AQI data found for this station.")
     st.stop()
 
-st.subheader(f"Live Readings at {selected}")
-latest = df.sort_values("datetime", ascending=False).drop_duplicates("parameter")
-cols = st.columns(len(latest))
-for idx, row in latest.iterrows():
-    cols[idx].metric(row["parameter"].upper(), f"{row['value']} {row['unit']}")
+# Trend Chart
+st.subheader(f"📈 AQI Trend at {selected_station}")
+pivot_df = data.pivot(index="datetime", columns="parameter", values="value")
+st.line_chart(pivot_df)
 
-# Health advisory based on PM2.5
-if "pm25" in latest["parameter"].values:
-    pm25_avg = float(latest[latest["parameter"]=="pm25"]["value"])
-    if pm25_avg < 50:
-        st.success(f"Air Quality: Good — PM2.5 at {pm25_avg} µg/m³.")
-    elif pm25_avg < 100:
-        st.warning(f"Moderate — PM2.5 at {pm25_avg} µg/m³.")
+# Stats
+st.subheader("📊 Summary Statistics")
+stats = data.groupby("parameter")["value"].agg(["mean", "max", "count"]).round(2)
+st.dataframe(stats)
+
+# Health advisory
+if "pm25" in pivot_df.columns:
+    avg_pm25 = pivot_df["pm25"].mean()
+    if avg_pm25 < 50:
+        msg = "🟢 Good"
+    elif avg_pm25 < 100:
+        msg = "🟡 Moderate"
+    elif avg_pm25 < 200:
+        msg = "🟠 Unhealthy"
     else:
-        st.error(f"Unhealthy — PM2.5 at {pm25_avg} µg/m³.")
-    st.markdown("- Wear an N95 if PM2.5 > 100\n- Limit outdoor activity on poor air days")
+        msg = "🔴 Hazardous"
+    st.subheader("🩺 Health Advisory")
+    st.markdown(f"**Avg PM2.5:** {avg_pm25:.1f} µg/m³ — **{msg}**")
+    st.markdown("- Avoid outdoor activity if air is Unhealthy or worse\n"
+                "- Use air purifiers and N95 masks indoors")
 
-with st.expander("📊 Show Historic Data"):
-    st.dataframe(df.sort_values("datetime", ascending=False).head(100))
+# Correlation Heatmap
+if pivot_df.shape[1] >= 2:
+    st.subheader("🔗 Pollutant Correlation Heatmap")
+    fig, ax = plt.subplots(figsize=(6, 4))
+    sns.heatmap(pivot_df.corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+    st.pyplot(fig)
 
+# Raw Table
+st.subheader("🧾 Recent Raw Data")
+st.dataframe(data.sort_values("datetime", ascending=False).head(50))
+
+# Footer
 st.markdown("---")
-st.markdown("📘 High school project by **Vinam Jain**, Modern School, Barakhamba Road. Powered by OpenAQ.")
+st.markdown("""
+**Project by Vinam Jain**, Class 12, Modern School Barakhamba Road  
+Built using **Streamlit**, powered by **OpenAQ**  
+""")
