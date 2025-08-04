@@ -1,47 +1,63 @@
 import streamlit as st
 import pandas as pd
+import requests
 import seaborn as sns
 import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
 
 # === Theme Toggle ===
 theme = st.sidebar.radio("🌗 Theme Mode", ["Light", "Dark"], index=1)
 if theme == "Dark":
-    st.markdown(
-        """
+    st.markdown("""
         <style>
         body { background-color: #1e1e1e; color: white; }
         .stApp { background-color: #1e1e1e; color: white; }
         </style>
-        """,
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
 
-# === Load Data ===
-@st.cache_data
-def load_data():
-    df = pd.read_csv("AQI DATA.csv", parse_dates=["datetimeLocal"])
-    df.columns = df.columns.str.strip().str.lower()
-    df["parameter"] = df["parameter"].str.lower()
-    df["location_name"] = df["location_name"].str.strip()
-    return df
-
-df = load_data()
+# === Location List ===
+LOCATIONS = ["Anand Vihar", "Chandni Chowk", "Punjabi Bagh", "RK Puram", "Mandir Marg", "Ashok Vihar"]
 
 # === Sidebar Filters ===
 st.sidebar.title("📍 Filters")
+selected_location = st.sidebar.selectbox("Monitoring Station", LOCATIONS)
 
-pollutants = sorted(df["parameter"].unique())
-selected_pollutants = st.sidebar.multiselect("Select Pollutants", pollutants, default=pollutants)
+# === Fetch Live Data from OpenAQ ===
+@st.cache_data(ttl=3600)
+def fetch_live_data(location_name):
+    base_url = "https://api.openaq.org/v2/measurements"
+    params = {
+        "city": "Delhi",
+        "location": location_name,
+        "parameter": ["pm25", "pm10", "no2", "o3", "so2", "co"],
+        "limit": 1000,
+        "date_from": (datetime.utcnow() - timedelta(days=14)).isoformat(),
+        "date_to": datetime.utcnow().isoformat(),
+        "sort": "desc",
+        "order_by": "datetime"
+    }
+    response = requests.get(base_url, params=params)
+    results = response.json().get("results", [])
+    df = pd.DataFrame(results)
+    if not df.empty:
+        df["datetime"] = pd.to_datetime(df["date"].apply(lambda x: x["utc"]))
+        df["parameter"] = df["parameter"].str.lower()
+        df["location"] = df["location"].str.strip()
+        df = df.rename(columns={"value": "value", "parameter": "parameter"})
+    return df
 
-df = df[df["parameter"].isin(selected_pollutants)]
+df = fetch_live_data(selected_location)
 
 # === Title ===
 st.title("🧪 Delhi AQI Dashboard")
-st.markdown("Monitor pollution trends from Delhi’s AQI sensors. View pollutant distributions, time trends, and overall stats.")
+st.markdown("Real-time air quality data from Delhi's OpenAQ stations. View trends, summaries, and health impacts.")
 
-# === Health Advisory Box ===
+# === Live AQI Summary Panel ===
+st.subheader("📡 Live AQI")
+pm25 = df[df["parameter"] == "pm25"]["value"].iloc[0] if not df[df["parameter"] == "pm25"].empty else None
+
 def get_health_advice(aqi_val):
     if aqi_val < 50:
         return "🟢 Good — Enjoy outdoor activities."
@@ -52,64 +68,74 @@ def get_health_advice(aqi_val):
     else:
         return "🔴 Hazardous — Avoid outdoor exposure, wear a mask."
 
-st.subheader("📋 Health Advisory")
-avg_pm25 = df[df["parameter"] == "pm25"]["value"].mean()
-if pd.notna(avg_pm25):
-    st.markdown(f"**PM2.5 Average: {avg_pm25:.1f} µg/m³** — {get_health_advice(avg_pm25)}")
+if pm25:
+    st.markdown(f"""
+    ### Today's PM2.5 AQI: **{pm25:.0f} µg/m³**  
+    **Status**: {get_health_advice(pm25)}  
+    **Location**: {selected_location}
+    """)
 else:
-    st.info("PM2.5 data not available for current filters.")
+    st.info("Live PM2.5 data unavailable for this location.")
 
-# === Distribution Plot ===
-st.subheader("📊 Pollutant Distribution")
+# === Health & Safety Section ===
+st.subheader("🏥 Health & Safety")
+st.markdown("""
+Air pollution, especially PM2.5 and NO₂, can worsen asthma, lung issues, and cardiovascular risks.
+
+- Children, elderly, and those with respiratory illness should **limit outdoor time**.
+- Wear **N95 masks** if AQI is over 150.
+- Consider **HEPA purifiers** for indoor spaces.
+""")
+
+# === Past Trends (Line Graph) ===
+st.subheader("📈 Fortnightly Trends")
 if not df.empty:
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sns.boxplot(data=df, x="parameter", y="value", ax=ax)
-    ax.set_ylabel("Concentration")
-    ax.set_xlabel("Pollutant")
-    plt.xticks(rotation=30)
+    trend_df = df.groupby(["datetime", "parameter"])["value"].mean().unstack()
+    fig, ax = plt.subplots(figsize=(12, 4))
+    trend_df.plot(ax=ax)
+    ax.set_ylabel("Concentration (µg/m³)")
+    ax.set_xlabel("Time")
+    plt.xticks(rotation=45)
+    plt.title(f"14-Day Trend at {selected_location}")
     st.pyplot(fig)
 else:
-    st.warning("No data found for selected filters.")
-
-# === Time Series ===
-st.subheader("📈 Time Trend")
-time_df = df.pivot_table(index="datetimelocal", columns="parameter", values="value", aggfunc="mean")
-if not time_df.empty:
-    fig2, ax2 = plt.subplots(figsize=(12, 4))
-    time_df.plot(ax=ax2)
-    ax2.set_ylabel("Concentration")
-    ax2.set_xlabel("Time")
-    plt.xticks(rotation=45)
-    plt.title("Hourly Trends")
-    st.pyplot(fig2)
-else:
-    st.warning("No time trend available.")
+    st.warning("No time trend data available.")
 
 # === Correlation Heatmap ===
-st.subheader("🌡️ Heatmap of Correlations")
-heatmap_data = df.pivot_table(index="datetimelocal", columns="parameter", values="value", aggfunc="mean").dropna()
+st.subheader("🌡️ Heatmap of Pollutant Correlations")
+heatmap_data = df.pivot_table(index="datetime", columns="parameter", values="value").dropna()
 if not heatmap_data.empty:
     corr = heatmap_data.corr()
-    fig3, ax3 = plt.subplots(figsize=(6, 4))
-    sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax3)
-    st.pyplot(fig3)
+    fig2, ax2 = plt.subplots(figsize=(6, 4))
+    sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax2)
+    st.pyplot(fig2)
 else:
-    st.warning("Not enough data for heatmap.")
+    st.warning("Insufficient data for correlation analysis.")
 
-# === Stats ===
+# === Summary Statistics ===
 st.subheader("📌 Summary Statistics")
 stats = df.groupby("parameter")["value"].agg(["mean", "max", "min", "count"]).round(2)
 st.dataframe(stats)
 
 # === Data Preview ===
-st.subheader("📄 Raw AQI Data")
+st.subheader("📄 Raw Data Preview")
 st.dataframe(df.reset_index(drop=True))
 
 # === Download Button ===
 st.download_button(
-    label="📥 Download Filtered Data",
+    label="📥 Download Live AQI Data",
     data=df.to_csv(index=False).encode("utf-8"),
-    file_name="filtered_aqi_data.csv",
+    file_name=f"{selected_location}_aqi_data.csv",
     mime="text/csv"
 )
 
+# === Project Footer ===
+st.markdown("---")
+st.markdown("""
+#### 🧾 About This Project  
+This AQI Dashboard was developed by **Vinam Jain**, a high school student at **Modern School, Barakhamba Road**.
+
+The project tracks real-time pollution levels in Delhi using OpenAQ data. It visualizes pollutant trends, gives health recommendations, and promotes awareness on environmental health and justice.
+
+_Week 4: Independent Project | CollegePass_
+""")
