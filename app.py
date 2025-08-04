@@ -1,74 +1,56 @@
-import streamlit as st
 import requests
+import streamlit as st
 from datetime import datetime
 
-# OpenAQ API setup
+# ---- PAGE SETUP ----
+st.set_page_config(page_title="Delhi AQI Live", layout="wide")
+st.title("🟢 Delhi AQI Dashboard – Live Data from OpenAQ")
+st.caption("Created by Vinam Jain | Data via OpenAQ")
+
+# ---- API SETUP ----
 API_KEY = "b5e603105ac2e6a269e65dd8b3659d91eadc422e602b8becd58c5ee70b867907"
-HEADERS = {"x-api-key": API_KEY}
-BASE_URL = "https://api.openaq.org/v2/measurements"
+headers = {"x-api-key": API_KEY}
+base_url = "https://api.openaq.org/v2/latest"
 
-st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide", initial_sidebar_state="auto")
-st.markdown("<h1 style='color:white;'>Delhi AQI Dashboard</h1>", unsafe_allow_html=True)
-st.markdown("<p><b>Built by Vinam Jain, Modern School Barakhamba Road.</b></p>", unsafe_allow_html=True)
-
-# Get list of locations in Delhi
-@st.cache_data(ttl=3600)
-def fetch_delhi_locations():
-    url = "https://api.openaq.org/v2/locations"
+# ---- FUNCTION TO FETCH DATA ----
+@st.cache_data(ttl=300)
+def fetch_live_data(city="Delhi"):
     params = {
-        "city": "Delhi",
+        "city": city,
         "country": "IN",
         "limit": 100,
-        "sort": "asc"
-    }
-    response = requests.get(url, headers=HEADERS, params=params)
-    if response.status_code == 200:
-        results = response.json().get("results", [])
-        return [loc["name"] for loc in results]
-    return []
-
-locations = fetch_delhi_locations()
-
-if not locations:
-    st.error("🚫 No Delhi locations available. Please check your API key or network.")
-    st.stop()
-
-selected_location = st.selectbox("📍 Select a Delhi AQI Monitoring Location:", locations)
-
-# Fetch latest AQI data for selected location
-def get_aqi_data(location):
-    params = {
-        "city": "Delhi",
-        "country": "IN",
-        "limit": 50,
         "sort": "desc",
-        "order_by": "datetime",
-        "location": location
+        "order_by": "lastUpdated"
     }
-    response = requests.get(BASE_URL, headers=HEADERS, params=params)
-    if response.status_code == 200:
-        return response.json().get("results", [])
-    return []
+    try:
+        r = requests.get(base_url, headers=headers, params=params)
+        r.raise_for_status()
+        return r.json()["results"]
+    except Exception as e:
+        st.error(f"Failed to fetch data: {e}")
+        return []
 
-data = get_aqi_data(selected_location)
+# ---- FETCH & DISPLAY DATA ----
+data = fetch_live_data()
 
 if not data:
-    st.warning("No recent AQI data found for this location.")
-    st.stop()
+    st.warning("No AQI data available right now for Delhi. Try again later.")
+else:
+    locations = sorted(set(loc["location"] for loc in data))
+    selected_location = st.selectbox("📍 Select Location", locations)
 
-# Show AQI readings
-st.subheader(f"📊 Latest AQI Measurements at {selected_location}")
+    location_data = next((loc for loc in data if loc["location"] == selected_location), None)
 
-for entry in data[:5]:  # Show top 5 readings
-    parameter = entry["parameter"].upper()
-    value = entry["value"]
-    unit = entry["unit"]
-    time = datetime.fromisoformat(entry["date"]["utc"][:-1]).strftime("%Y-%m-%d %H:%M")
-    st.info(f"**{parameter}**: {value} {unit} (as of {time} UTC)")
+    if location_data:
+        st.subheader(f"Live Air Quality – {selected_location}")
+        st.write(f"Last Updated: {location_data['measurements'][0]['lastUpdated']}")
+        for measure in location_data["measurements"]:
+            st.metric(label=f"{measure['parameter'].upper()}", value=f"{measure['value']} {measure['unit']}")
+    else:
+        st.error("Data not found for selected location.")
 
-# Footer
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown(
-    "<p style='font-size: 0.9em;'>🌍 Data from <a href='https://openaq.org' target='_blank'>OpenAQ</a> | Created for educational use.</p>",
-    unsafe_allow_html=True
-)
+# ---- FOOTER ----
+st.markdown("---")
+st.markdown("📘 This is part of a high school project on Delhi's air quality and environmental data justice.")
+st.markdown("🔗 [OpenAQ API](https://docs.openaq.org/)")
+
