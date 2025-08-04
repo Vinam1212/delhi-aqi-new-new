@@ -1,68 +1,75 @@
 import streamlit as st
 import requests
+import pandas as pd
 from datetime import datetime
 
-# App setup
+# Page setup
 st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
-st.title("🌀 Delhi AQI Live Dashboard")
-st.caption("Live data from OpenAQ")
+st.title("🟢 Delhi AQI Dashboard – Live Data from OpenAQ")
+st.caption("Created by Vinam Jain | Modern School, Barakhamba Road")
 
-# API Setup
 API_KEY = "b5e603105ac2e6a269e65dd8b3659d91eadc422e602b8becd58c5ee70b867907"
-API_URL = "https://api.openaq.org/v2/measurements"
+HEADERS = {"Accept": "application/json", "X-API-Key": API_KEY}
 
-# Location options
-locations = [
-    "Anand Vihar", "R K Puram", "Punjabi Bagh", "Mandir Marg",
-    "Alipur", "Ashok Vihar", "Bawana", "Burari Crossing", "Dilshad Garden",
-    "Dwarka", "IGI Airport", "Jahangirpuri", "Mundka", "North Campus"
-]
-location = st.sidebar.selectbox("📍 Select Location", locations)
+@st.cache_data(ttl=600)
+def fetch_locations():
+    url = "https://api.openaq.org/v2/locations"
+    params = {"city": "Delhi", "country": "IN", "limit": 500}
+    resp = requests.get(url, headers=HEADERS, params=params)
+    if resp.status_code == 200:
+        df = pd.DataFrame(resp.json().get("results", []))
+        return sorted(df["name"].dropna().unique())
+    return []
 
-# Fetch data from OpenAQ
-params = {
-    "country": "IN",
-    "city": "Delhi",
-    "location": location,
-    "limit": 100,
-    "sort": "desc",
-    "order_by": "datetime"
-}
-headers = {"accept": "application/json", "X-API-Key": API_KEY}
-response = requests.get(API_URL, headers=headers, params=params)
+@st.cache_data(ttl=600)
+def fetch_measurements(location):
+    url = "https://api.openaq.org/v2/measurements"
+    params = {
+        "city": "Delhi",
+        "country": "IN",
+        "location": location,
+        "limit": 500,
+        "sort": "desc",
+        "order_by": "datetime"
+    }
+    resp = requests.get(url, headers=HEADERS, params=params)
+    if resp.status_code == 200:
+        df = pd.DataFrame(resp.json().get("results", []))
+        if not df.empty:
+            df["datetime"] = pd.to_datetime(df["date"]["utc"])
+            return df[["parameter", "value", "unit", "datetime"]]
+    return pd.DataFrame()
 
-# Display data
-if response.status_code == 200:
-    data = response.json().get("results", [])
-    if data:
-        latest = data[0]
-        parameter = latest["parameter"].upper()
-        value = latest["value"]
-        unit = latest["unit"]
-        timestamp = latest["date"]["utc"]
-        time = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S+00:00").strftime("%d %b %Y, %I:%M %p")
+locations = fetch_locations()
+if not locations:
+    st.error("⚠️ No Delhi locations loaded. API key or network issue.")
+    st.stop()
 
-        st.metric(f"{parameter} Level", f"{value} {unit}")
-        st.write(f"📍 **Location:** {location}")
-        st.write(f"🕒 **Last Updated:** {time} UTC")
+selected = st.sidebar.selectbox("📍 Select Monitoring Location", locations)
+df = fetch_measurements(selected)
+if df.empty:
+    st.warning(f"No recent data for {selected}. Try another location.")
+    st.stop()
 
-        if parameter == "PM2.5":
-            if value <= 30:
-                st.success("Good 🟢 – Minimal impact.")
-            elif value <= 60:
-                st.info("Moderate 🟡 – Sensitive groups take care.")
-            elif value <= 90:
-                st.warning("Poor 🟠 – Avoid outdoor activity if possible.")
-            else:
-                st.error("Very Poor 🔴 – Stay indoors.")
-        
-        with st.expander("🔍 Full Raw Data"):
-            st.dataframe(data)
+st.subheader(f"Live Readings at {selected}")
+latest = df.sort_values("datetime", ascending=False).drop_duplicates("parameter")
+cols = st.columns(len(latest))
+for idx, row in latest.iterrows():
+    cols[idx].metric(row["parameter"].upper(), f"{row['value']} {row['unit']}")
+
+# Health advisory based on PM2.5
+if "pm25" in latest["parameter"].values:
+    pm25_avg = float(latest[latest["parameter"]=="pm25"]["value"])
+    if pm25_avg < 50:
+        st.success(f"Air Quality: Good — PM2.5 at {pm25_avg} µg/m³.")
+    elif pm25_avg < 100:
+        st.warning(f"Moderate — PM2.5 at {pm25_avg} µg/m³.")
     else:
-        st.warning("⚠️ No data available for this location.")
-else:
-    st.error("❌ Could not fetch data from OpenAQ.")
-    
-# Footer
+        st.error(f"Unhealthy — PM2.5 at {pm25_avg} µg/m³.")
+    st.markdown("- Wear an N95 if PM2.5 > 100\n- Limit outdoor activity on poor air days")
+
+with st.expander("📊 Show Historic Data"):
+    st.dataframe(df.sort_values("datetime", ascending=False).head(100))
+
 st.markdown("---")
-st.markdown("Created by **Vinam Jain**, Class 12 — Modern School, Barakhamba Road")
+st.markdown("📘 High school project by **Vinam Jain**, Modern School, Barakhamba Road. Powered by OpenAQ.")
