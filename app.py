@@ -56,7 +56,6 @@ st.markdown("Real-time air quality data from Delhi's OpenAQ stations. View trend
 
 # === Live AQI Summary Panel ===
 st.subheader("📡 Live AQI")
-pm25 = df[df["parameter"] == "pm25"]["value"].iloc[0] if not df[df["parameter"] == "pm25"].empty else None
 
 def get_health_advice(aqi_val):
     if aqi_val < 50:
@@ -68,14 +67,20 @@ def get_health_advice(aqi_val):
     else:
         return "🔴 Hazardous — Avoid outdoor exposure, wear a mask."
 
-if pm25:
+pm25_val = None
+if not df.empty and "parameter" in df.columns and "value" in df.columns:
+    pm25_data = df[df["parameter"] == "pm25"]
+    if not pm25_data.empty:
+        pm25_val = pm25_data["value"].iloc[0]
+
+if pm25_val is not None:
     st.markdown(f"""
-    ### Today's PM2.5 AQI: **{pm25:.0f} µg/m³**  
-    **Status**: {get_health_advice(pm25)}  
+    ### Today's PM2.5 AQI: **{pm25_val:.0f} µg/m³**  
+    **Status**: {get_health_advice(pm25_val)}  
     **Location**: {selected_location}
     """)
 else:
-    st.info("Live PM2.5 data unavailable for this location.")
+    st.warning("⚠️ PM2.5 data is currently unavailable for this location. Try switching to another station.")
 
 # === Health & Safety Section ===
 st.subheader("🏥 Health & Safety")
@@ -114,20 +119,27 @@ else:
 
 # === Summary Statistics ===
 st.subheader("📌 Summary Statistics")
-stats = df.groupby("parameter")["value"].agg(["mean", "max", "min", "count"]).round(2)
-st.dataframe(stats)
+if not df.empty:
+    stats = df.groupby("parameter")["value"].agg(["mean", "max", "min", "count"]).round(2)
+    st.dataframe(stats)
+else:
+    st.info("No data available for summary statistics.")
 
 # === Data Preview ===
 st.subheader("📄 Raw Data Preview")
-st.dataframe(df.reset_index(drop=True))
+if not df.empty:
+    st.dataframe(df.reset_index(drop=True))
+else:
+    st.info("No data to preview.")
 
 # === Download Button ===
-st.download_button(
-    label="📥 Download Live AQI Data",
-    data=df.to_csv(index=False).encode("utf-8"),
-    file_name=f"{selected_location}_aqi_data.csv",
-    mime="text/csv"
-)
+if not df.empty:
+    st.download_button(
+        label="📥 Download Live AQI Data",
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=f"{selected_location}_aqi_data.csv",
+        mime="text/csv"
+    )
 
 # === Project Footer ===
 st.markdown("---")
@@ -135,7 +147,9 @@ st.markdown("""
 #### 🧾 About This Project  
 This AQI Dashboard was developed by **Vinam Jain**, a high school student at **Modern School, Barakhamba Road**.
 
-The project tracks real-time pollution levels in Delhi using OpenAQ data. It visualizes pollutant trends, gives health recommendations, and promotes awareness on environmental health and justice.
+The project tracks real-time pollution levels in Delhi using OpenAQ data.  
+It visualizes pollutant trends, gives health recommendations, and promotes awareness on environmental health and justice.
 
-_Week 4: Independent Project | CollegePass_
+_Week 4: Independent Research Project | CollegePass_
 """)
+
