@@ -1,67 +1,68 @@
 import streamlit as st
 import requests
-import pandas as pd
 from datetime import datetime
 
-# Title and Description
-st.set_page_config(page_title="Delhi AQI Dashboard", layout="centered")
-st.markdown("### 🟢 Delhi AQI Dashboard – Live Data from OpenAQ")
-st.caption("Created by Vinam Jain | Data via OpenAQ")
+# App setup
+st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
+st.title("🌀 Delhi AQI Live Dashboard")
+st.caption("Live data from OpenAQ")
 
-# Your API Key
+# API Setup
 API_KEY = "b5e603105ac2e6a269e65dd8b3659d91eadc422e602b8becd58c5ee70b867907"
+API_URL = "https://api.openaq.org/v2/measurements"
 
-# Define headers
-headers = {
-    "Accept": "application/json",
-    "X-API-Key": API_KEY
-}
+# Location options
+locations = [
+    "Anand Vihar", "R K Puram", "Punjabi Bagh", "Mandir Marg",
+    "Alipur", "Ashok Vihar", "Bawana", "Burari Crossing", "Dilshad Garden",
+    "Dwarka", "IGI Airport", "Jahangirpuri", "Mundka", "North Campus"
+]
+location = st.sidebar.selectbox("📍 Select Location", locations)
 
-# API call to get latest measurements in Delhi
+# Fetch data from OpenAQ
 params = {
     "country": "IN",
     "city": "Delhi",
+    "location": location,
     "limit": 100,
     "sort": "desc",
     "order_by": "datetime"
 }
-url = "https://api.openaq.org/v3/measurements"
+headers = {"accept": "application/json", "X-API-Key": API_KEY}
+response = requests.get(API_URL, headers=headers, params=params)
 
-try:
-    response = requests.get(url, headers=headers, params=params)
-    response.raise_for_status()
-    data = response.json()
+# Display data
+if response.status_code == 200:
+    data = response.json().get("results", [])
+    if data:
+        latest = data[0]
+        parameter = latest["parameter"].upper()
+        value = latest["value"]
+        unit = latest["unit"]
+        timestamp = latest["date"]["utc"]
+        time = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S+00:00").strftime("%d %b %Y, %I:%M %p")
 
-    if "results" in data and len(data["results"]) > 0:
-        df = pd.DataFrame(data["results"])
-        df["datetime"] = pd.to_datetime(df["date"]["utc"])
-        df = df[["location", "parameter", "value", "unit", "datetime"]]
+        st.metric(f"{parameter} Level", f"{value} {unit}")
+        st.write(f"📍 **Location:** {location}")
+        st.write(f"🕒 **Last Updated:** {time} UTC")
 
-        st.success(f"Fetched {len(df)} recent measurements for Delhi.")
-        st.dataframe(df)
-
-        # Optional: Health tip based on PM2.5
-        pm25 = df[df["parameter"] == "pm25"]
-        if not pm25.empty:
-            avg_pm25 = pm25["value"].mean()
-            st.markdown(f"**Average PM2.5**: {avg_pm25:.2f} µg/m³")
-
-            if avg_pm25 <= 50:
-                st.success("Air quality is good.")
-            elif avg_pm25 <= 100:
-                st.warning("Air quality is moderate.")
+        if parameter == "PM2.5":
+            if value <= 30:
+                st.success("Good 🟢 – Minimal impact.")
+            elif value <= 60:
+                st.info("Moderate 🟡 – Sensitive groups take care.")
+            elif value <= 90:
+                st.warning("Poor 🟠 – Avoid outdoor activity if possible.")
             else:
-                st.error("Air quality is poor. Consider wearing a mask.")
+                st.error("Very Poor 🔴 – Stay indoors.")
+        
+        with st.expander("🔍 Full Raw Data"):
+            st.dataframe(data)
     else:
-        st.warning("No AQI data available for Delhi right now. Try again later.")
-
-except requests.exceptions.RequestException as e:
-    st.error(f"Failed to fetch data: {e}")
-
+        st.warning("⚠️ No data available for this location.")
+else:
+    st.error("❌ Could not fetch data from OpenAQ.")
+    
 # Footer
 st.markdown("---")
-st.markdown("📘 This is part of a high school project on Delhi's air quality and environmental data justice.")
-st.markdown("[🔗 OpenAQ API](https://docs.openaq.org/)")
-
-
-
+st.markdown("Created by **Vinam Jain**, Class 12 — Modern School, Barakhamba Road")
