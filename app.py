@@ -1,92 +1,76 @@
 import streamlit as st
 import pandas as pd
 import requests
-import seaborn as sns
-import matplotlib.pyplot as plt
+from datetime import datetime, timedelta
 
-st.set_page_config(layout="wide", page_title="Delhi AQI Dashboard")
+st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
+
+# Title & Subtitle
 st.title("📊 Delhi Air Quality Dashboard")
 st.markdown("Created by **Vinam Jain**, a high school student at *Modern School Barakhamba Road*.")
 
-# ----- Load Live Data from OpenAQ -----
-@st.cache_data(ttl=3600)
-def fetch_openaq_data(locations):
-    url = "https://api.openaq.org/v2/measurements"
-    dfs = []
-    for loc in locations:
-        params = {
-            "city": "Delhi",
-            "location": loc,
-            "limit": 1000,
-            "sort": "desc",
-            "order_by": "datetime"
-        }
-        res = requests.get(url, params=params)
-        if res.status_code == 200:
-            data = res.json()["results"]
-            if data:
-                df = pd.DataFrame(data)
-                dfs.append(df)
-    return pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+# Station list
+stations = [
+    "Anand Vihar", "R K Puram", "Mandir Marg", "Punjabi Bagh",
+    "Chandni Chowk", "ITO", "Ashok Vihar", "Dwarka", "Jahangirpuri"
+]
 
-# ---- UI Layout ----
-st.sidebar.markdown("📍 **Filters**")
-locations_list = ["Chandni Chowk", "Anand Vihar", "R K Puram", "Mandir Marg", "Punjabi Bagh"]
-selected_location = st.sidebar.selectbox("Monitoring Station", locations_list)
+# Sidebar
+st.sidebar.header("📍 Filters")
+selected_station = st.sidebar.selectbox("Monitoring Station", stations)
 
-df = fetch_openaq_data([selected_location])
+# Fetch OpenAQ data
+@st.cache_data(ttl=600)
+def fetch_openaq_data(city="Delhi"):
+    url = f"https://api.openaq.org/v2/measurements?city={city}&limit=1000&sort=desc"
+    r = requests.get(url)
+    data = r.json()
 
-if df.empty:
+    if "results" not in data:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(data["results"])
+    if df.empty:
+        return df
+
+    df = df[["location", "parameter", "value", "unit", "date"]]
+    df["datetime"] = pd.to_datetime(df["date"].apply(lambda x: x["utc"]))
+    return df.drop(columns=["date"])
+
+# Load and filter data
+data = fetch_openaq_data()
+
+filtered = data[data["location"].str.lower().str.strip() == selected_station.lower().strip()]
+
+if filtered.empty:
     st.warning("⚠️ No data available for the selected station. Try another location.")
-    st.stop()
-
-# Fix datetime column
-df["datetime"] = pd.to_datetime(df["date"]["utc"])
-df["parameter"] = df["parameter"].str.upper()
-df = df[["datetime", "parameter", "value"]]
-
-# ---- 1. Trend Line ----
-st.subheader("📈 AQI Trend Over Time")
-latest = df.groupby("datetime")["value"].mean().reset_index()
-if not latest.empty:
-    st.line_chart(latest.rename(columns={"datetime": "index"}).set_index("index"))
 else:
-    st.info("No time trend data available.")
+    latest = filtered.sort_values("datetime", ascending=False).head(10)
+    st.success(f"✅ Latest Readings from **{selected_station}**")
+    st.dataframe(latest[["datetime", "parameter", "value", "unit"]])
 
-# ---- 2. Heatmap of Pollutants ----
-st.subheader("🧪 Heatmap of Pollutant Correlations")
-try:
-    heatmap_data = df.pivot_table(index="datetime", columns="parameter", values="value").dropna()
-    corr = heatmap_data.corr()
-    fig, ax = plt.subplots()
-    sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax)
-    st.pyplot(fig)
-except KeyError:
-    st.error("Not enough data to generate heatmap.")
+    # Plot
+    chart_data = filtered.groupby(["datetime", "parameter"])["value"].mean().unstack().fillna(0)
+    st.line_chart(chart_data)
 
-# ---- 3. Health & Safety Tips ----
-st.subheader("🛡️ Health & Safety Recommendations")
-avg_pm25 = df[df["parameter"] == "PM25"]["value"].mean()
-if avg_pm25:
-    if avg_pm25 < 50:
-        msg = "✅ Air quality is good. Enjoy outdoor activities."
-    elif avg_pm25 < 100:
-        msg = "🟡 Moderate AQI. Sensitive individuals should limit prolonged outdoor exertion."
-    else:
-        msg = "🔴 Poor air quality. Avoid outdoor exercise. Wear a mask if needed."
-    st.success(msg)
-
-# ---- 4. Project Summary ----
-st.subheader("📚 Project Summary")
-st.markdown("""
-This dashboard displays real-time air quality measurements from OpenAQ for different locations in Delhi. 
-It helps identify trends, correlations between pollutants, and offers health tips based on PM2.5 levels.
-
-**Data Source:** [OpenAQ](https://openaq.org)  
-**Author:** Vinam Jain, Class 12  
-**School:** Modern School Barakhamba Road
+# Health & Safety Info
+with st.expander("🛡️ Health & Safety Recommendations"):
+    st.markdown("""
+- **PM2.5 > 100**: Avoid outdoor activities.
+- **PM10 > 150**: Wear a mask.
+- **NO₂ > 80**: Risky for people with asthma.
+- **General Tip**: Use air purifiers indoors if available.
 """)
 
-# ---- Footer ----
+# Project Summary
+with st.expander("📘 Project Summary"):
+    st.markdown("""
+This dashboard shows real-time air quality data from OpenAQ for Delhi.
+It helps users monitor pollutants like PM2.5, PM10, and NO₂ at key locations.
+The goal is to promote awareness and health-focused decisions using environmental data.
+""")
+
+# Credits
 st.markdown("---")
-st.markdown("© 2025 Vinam Jain | Built using Streamlit")
+st.markdown("© 2025 | Dashboard developed by **Vinam Jain** | Data from [OpenAQ](https://openaq.org)")
+
