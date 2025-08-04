@@ -3,74 +3,87 @@ import pandas as pd
 import requests
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
-
-# Title & Subtitle
+# --- SETTINGS ---
+st.set_page_config(page_title="Delhi AQI", layout="wide")
 st.title("📊 Delhi Air Quality Dashboard")
 st.markdown("Created by **Vinam Jain**, a high school student at *Modern School Barakhamba Road*.")
 
-# Station list
-stations = [
-    "Anand Vihar", "R K Puram", "Mandir Marg", "Punjabi Bagh",
-    "Chandni Chowk", "ITO", "Ashok Vihar", "Dwarka", "Jahangirpuri"
-]
-
-# Sidebar
+# --- SIDEBAR ---
 st.sidebar.header("📍 Filters")
+stations = ["Anand Vihar", "Chandni Chowk", "R K Puram", "Mandir Marg"]
 selected_station = st.sidebar.selectbox("Monitoring Station", stations)
 
-# Fetch OpenAQ data
-@st.cache_data(ttl=600)
-def fetch_openaq_data(city="Delhi"):
-    url = f"https://api.openaq.org/v2/measurements?city={city}&limit=1000&sort=desc"
-    r = requests.get(url)
-    data = r.json()
+# --- HELPER FUNCTION TO FETCH LIVE DATA ---
+@st.cache_data(ttl=300)
+def fetch_openaq_data(location):
+    try:
+        url = f"https://api.openaq.org/v2/measurements"
+        params = {
+            "city": "Delhi",
+            "location": location,
+            "limit": 100,
+            "sort": "desc",
+            "order_by": "datetime"
+        }
+        res = requests.get(url, params=params)
+        json_data = res.json()
 
-    if "results" not in data:
+        if "results" in json_data and len(json_data["results"]) > 0:
+            df = pd.DataFrame(json_data["results"])
+            df["datetime"] = pd.to_datetime(df["date"].apply(lambda x: x["utc"]))
+            df["parameter"] = df["parameter"].str.upper()
+            return df[["location", "parameter", "value", "unit", "datetime"]]
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-    df = pd.DataFrame(data["results"])
-    if df.empty:
-        return df
+# --- LOAD DATA ---
+data = fetch_openaq_data(selected_station)
 
-    df = df[["location", "parameter", "value", "unit", "date"]]
-    df["datetime"] = pd.to_datetime(df["date"].apply(lambda x: x["utc"]))
-    return df.drop(columns=["date"])
-
-# Load and filter data
-data = fetch_openaq_data()
-
-filtered = data[data["location"].str.lower().str.strip() == selected_station.lower().strip()]
-
-if filtered.empty:
-    st.warning("⚠️ No data available for the selected station. Try another location.")
+if data.empty or "location" not in data.columns:
+    st.warning("⚠️ No data available for the selected station. Try another station or check back later.")
 else:
-    latest = filtered.sort_values("datetime", ascending=False).head(10)
-    st.success(f"✅ Latest Readings from **{selected_station}**")
-    st.dataframe(latest[["datetime", "parameter", "value", "unit"]])
+    # --- METRICS ---
+    latest = data.sort_values("datetime", ascending=False).drop_duplicates("parameter")
+    st.subheader("📈 Latest Readings")
+    cols = st.columns(len(latest))
+    for i, row in latest.iterrows():
+        with cols[i]:
+            st.metric(label=row["parameter"], value=f"{row['value']} {row['unit']}")
 
-    # Plot
-    chart_data = filtered.groupby(["datetime", "parameter"])["value"].mean().unstack().fillna(0)
-    st.line_chart(chart_data)
+    # --- HISTORICAL CHART ---
+    st.subheader("📉 Trend over Time")
+    for pollutant in data["parameter"].unique():
+        df_pollutant = data[data["parameter"] == pollutant]
+        st.line_chart(df_pollutant.set_index("datetime")["value"], height=200, use_container_width=True)
 
-# Health & Safety Info
-with st.expander("🛡️ Health & Safety Recommendations"):
+    # --- HEALTH & SAFETY INFO ---
+    st.subheader("🚨 Health & Safety Guidelines")
     st.markdown("""
-- **PM2.5 > 100**: Avoid outdoor activities.
-- **PM10 > 150**: Wear a mask.
-- **NO₂ > 80**: Risky for people with asthma.
-- **General Tip**: Use air purifiers indoors if available.
-""")
+    - **PM2.5 > 100**: Avoid outdoor activities.
+    - **NO2 > 80**: Risk of respiratory issues.
+    - Wear masks and keep windows closed.
+    - Check AQI before planning travel or exercise.
+    """)
 
-# Project Summary
-with st.expander("📘 Project Summary"):
+    # --- PROJECT SUMMARY ---
+    st.subheader("📝 About This Project")
     st.markdown("""
-This dashboard shows real-time air quality data from OpenAQ for Delhi.
-It helps users monitor pollutants like PM2.5, PM10, and NO₂ at key locations.
-The goal is to promote awareness and health-focused decisions using environmental data.
-""")
+    This dashboard tracks live air quality data across major Delhi stations using the [OpenAQ API](https://docs.openaq.org/).
+    
+    **Features:**
+    - Live data display
+    - Historical trends
+    - Health advisories
+    - Support for multiple locations
+    
+    **Created as part of a high school research project** on data inequality and environmental monitoring.
+    """)
 
-# Credits
+# --- FOOTER ---
 st.markdown("---")
-st.markdown("© 2025 | Dashboard developed by **Vinam Jain** | Data from [OpenAQ](https://openaq.org)")
+st.markdown("© 2025 Vinam Jain | Modern School Barakhamba Road")
+
 
