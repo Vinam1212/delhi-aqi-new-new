@@ -2,88 +2,80 @@ import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-# --- SETTINGS ---
-st.set_page_config(page_title="Delhi AQI", layout="wide")
-st.title("📊 Delhi Air Quality Dashboard")
-st.markdown("Created by **Vinam Jain**, a high school student at *Modern School Barakhamba Road*.")
+st.set_page_config(layout="wide", page_title="Delhi AQI Dashboard")
+st.title("Delhi AQI Dashboard")
+st.markdown("Built by **Vinam Jain**, Modern School Barakhamba Road.")
 
-# --- SIDEBAR ---
-st.sidebar.header("📍 Filters")
-stations = ["Anand Vihar", "Chandni Chowk", "R K Puram", "Mandir Marg"]
-selected_station = st.sidebar.selectbox("Monitoring Station", stations)
+@st.cache_data(ttl=3600)
+def get_delhi_locations():
+    url = "https://api.openaq.org/v3/locations"
+    params = {"city": "Delhi", "limit": 500}
+    resp = requests.get(url, params=params).json().get("results", [])
+    df = pd.DataFrame(resp)
+    return sorted(df["location"].dropna().unique()) if "location" in df else []
 
-# --- HELPER FUNCTION TO FETCH LIVE DATA ---
-@st.cache_data(ttl=300)
-def fetch_openaq_data(location):
-    try:
-        url = f"https://api.openaq.org/v2/measurements"
-        params = {
-            "city": "Delhi",
-            "location": location,
-            "limit": 100,
-            "sort": "desc",
-            "order_by": "datetime"
-        }
-        res = requests.get(url, params=params)
-        json_data = res.json()
+@st.cache_data(ttl=600)
+def fetch_measurements(location):
+    url = "https://api.openaq.org/v3/measurements"
+    params = {
+        "city": "Delhi",
+        "location": location,
+        "limit": 1000,
+        "sort": "desc",
+        "order_by": "datetime"
+    }
+    r = requests.get(url, params=params)
+    results = r.json().get("results", [])
+    df = pd.DataFrame(results)
+    if df.empty:
+        return df
+    df["datetime"] = pd.to_datetime(df["date"].apply(lambda d: d["utc"]))
+    df["parameter"] = df["parameter"].str.lower()
+    return df[["location", "parameter", "value", "unit", "datetime"]]
 
-        if "results" in json_data and len(json_data["results"]) > 0:
-            df = pd.DataFrame(json_data["results"])
-            df["datetime"] = pd.to_datetime(df["date"].apply(lambda x: x["utc"]))
-            df["parameter"] = df["parameter"].str.upper()
-            return df[["location", "parameter", "value", "unit", "datetime"]]
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-        return pd.DataFrame()
+locations = get_delhi_locations()
+if not locations:
+    st.error("❌ No Delhi locations available.")
+    st.stop()
 
-# --- LOAD DATA ---
-data = fetch_openaq_data(selected_station)
+station = st.sidebar.selectbox("📍 Choose Station", locations)
+df = fetch_measurements(station)
+if df.empty:
+    st.warning(f"No data for *{station}*. Try another station.")
+    st.stop()
 
-if data.empty or "location" not in data.columns:
-    st.warning("⚠️ No data available for the selected station. Try another station or check back later.")
-else:
-    # --- METRICS ---
-    latest = data.sort_values("datetime", ascending=False).drop_duplicates("parameter")
-    st.subheader("📈 Latest Readings")
-    cols = st.columns(len(latest))
-    for i, row in latest.iterrows():
-        with cols[i]:
-            st.metric(label=row["parameter"], value=f"{row['value']} {row['unit']}")
+# Show latest values
+latest = df.sort_values("datetime", ascending=False).drop_duplicates("parameter")
+cols = st.columns(len(latest))
+for i, row in latest.iterrows():
+    cols[i].metric(row["parameter"].upper(), f"{row['value']} {row['unit']}")
 
-    # --- HISTORICAL CHART ---
-    st.subheader("📉 Trend over Time")
-    for pollutant in data["parameter"].unique():
-        df_pollutant = data[data["parameter"] == pollutant]
-        st.line_chart(df_pollutant.set_index("datetime")["value"], height=200, use_container_width=True)
+# Time trend
+st.subheader("Trends (Last ~1000 points)")
+trend = df.groupby(["datetime", "parameter"])["value"].mean().unstack().fillna(0)
+st.line_chart(trend)
 
-    # --- HEALTH & SAFETY INFO ---
-    st.subheader("🚨 Health & Safety Guidelines")
-    st.markdown("""
-    - **PM2.5 > 100**: Avoid outdoor activities.
-    - **NO2 > 80**: Risk of respiratory issues.
-    - Wear masks and keep windows closed.
-    - Check AQI before planning travel or exercise.
-    """)
+# Correlation heatmap
+st.subheader("Pollutant Correlations")
+corr = trend.corr()
+fig, ax = plt.subplots(figsize=(6, 4))
+sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+st.pyplot(fig)
 
-    # --- PROJECT SUMMARY ---
-    st.subheader("📝 About This Project")
-    st.markdown("""
-    This dashboard tracks live air quality data across major Delhi stations using the [OpenAQ API](https://docs.openaq.org/).
-    
-    **Features:**
-    - Live data display
-    - Historical trends
-    - Health advisories
-    - Support for multiple locations
-    
-    **Created as part of a high school research project** on data inequality and environmental monitoring.
-    """)
+# Health tips
+st.subheader("Health & Safety Advisory")
+avg_pm25 = df[df["parameter"] == "pm25"]["value"].mean()
+if pd.notna(avg_pm25):
+    advice = "Good" if avg_pm25 < 50 else "Moderate" if avg_pm25 < 100 else "Poor"
+    st.markdown(f"PM2.5 average is **{avg_pm25:.1f} µg/m³** — **{advice}**")
+st.markdown("- Masks if PM2.5 > 100\n- Keep windows closed on peak pollution days\n- Children & elderly should limit outdoor exposure")
 
-# --- FOOTER ---
+# Footer
 st.markdown("---")
-st.markdown("© 2025 Vinam Jain | Modern School Barakhamba Road")
+st.markdown("© 2025 Vinam Jain • Modern School Barakhamba Road")
+
 
 
