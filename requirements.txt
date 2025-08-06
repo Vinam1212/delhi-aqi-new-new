@@ -1,5 +1,5 @@
 streamlit
-matplotlib
 pandas
-numpy
-streamlit-option-menu
+requests
+plotly
+pytz
