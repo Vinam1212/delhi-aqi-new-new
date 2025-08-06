@@ -1,124 +1,134 @@
-# streamlit_app.py
-
 import streamlit as st
-import pandas as pd
-import numpy as np
 import requests
-import datetime
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+import pandas as pd
+import time
+import pytz
+from datetime import datetime
+import plotly.express as px
+import random
 
-# --- Config ---
+# -----------------------------------
+# 🧠 CONFIG
+# -----------------------------------
 st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
 
-# --- Sidebar ---
-st.sidebar.title("🔧 Controls")
-pollutant_choice = st.sidebar.selectbox("Select Pollutant", ["pm25", "no2", "o3"])
-theme = st.sidebar.radio("Theme", ["Dark", "Light"])
-location_display = st.sidebar.selectbox("Location", ["Chandni Chowk", "Anand Vihar", "RK Puram (simulated)"])
-
-# --- Style ---
-if theme == "Dark":
-    st.markdown(
-        """
-        <style>
-        body { background-color: #1e1e1e; color: white; }
-        .main { background-color: #1e1e1e; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-# --- AQI Data Setup ---
-FIXED_LOCATION = "Anand Vihar"
-API_URL = "https://api.openaq.org/v2/measurements"
-
-params = {
-    "city": "Delhi",
-    "location": FIXED_LOCATION,
-    "parameter": pollutant_choice,
-    "limit": 100,
-    "sort": "desc",
-    "order_by": "datetime"
-}
-
-try:
-    r = requests.get(API_URL, params=params)
-    data = r.json()["results"]
-    df = pd.DataFrame(data)
-    df["date"] = pd.to_datetime(df["date"]["utc"].apply(lambda x: x))
-    df.sort_values("date", inplace=True)
-except:
-    # Fallback simulated data
-    df = pd.DataFrame({
-        "date": pd.date_range(end=pd.Timestamp.now(), periods=24, freq="H"),
-        "value": np.random.randint(20, 80, size=24)
-    })
-
-# --- Centered AQI ---
-latest_aqi = int(df["value"].iloc[-1]) if not df.empty else 0
-
+# -----------------------------------
+# 🎨 Custom CSS for Design
+# -----------------------------------
 st.markdown("""
     <style>
-        .aqi-box {
-            margin-top: 20px;
-            font-size: 60px;
-            font-weight: bold;
-            color: red;
-            background-color: white;
-            border-radius: 50%;
-            width: 120px;
-            height: 120px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-left: auto;
-            margin-right: auto;
-            box-shadow: 0px 0px 15px rgba(255,0,0,0.4);
-            animation: pop 1s ease-in-out;
-        }
-        @keyframes pop {
-            0% { transform: scale(0.7); opacity: 0; }
-            100% { transform: scale(1); opacity: 1; }
-        }
+    body {
+        background-image: url("https://images.unsplash.com/photo-1606112219348-204d7d8b94ee");
+        background-size: cover;
+        background-attachment: fixed;
+    }
+    .big-number {
+        font-size: 70px;
+        font-weight: bold;
+        color: white;
+        margin-top: -20px;
+        animation: popin 1.2s ease;
+    }
+    @keyframes popin {
+        0% {transform: scale(0.6); opacity: 0;}
+        100% {transform: scale(1); opacity: 1;}
+    }
+    .circle {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        background-color: #1f77b4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: auto;
+        box-shadow: 0 0 15px rgba(0,0,0,0.2);
+    }
     </style>
-    <div class="aqi-box">{}</div>
-""".format(latest_aqi), unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# --- Date & Time (IST) ---
-ist_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
-st.markdown(
-    f"<div style='text-align:right; font-size:16px;'>🕒 {ist_now.strftime('%A, %d %B %Y | %I:%M %p')} IST</div>",
-    unsafe_allow_html=True,
-)
+# -----------------------------------
+# 🧭 Sidebar
+# -----------------------------------
+st.sidebar.title("📊 Controls")
+selected_pollutants = st.sidebar.multiselect("Select Pollutants", ['pm25', 'pm10', 'no2', 'o3', 'co', 'so2'], default=['pm25', 'no2'])
+theme = st.sidebar.radio("Theme", ['Dark', 'Light'])
 
+# -----------------------------------
+# 📍 Simulated Location UI
+# -----------------------------------
+locations = ['Anand Vihar', 'Chandni Chowk', 'RK Puram', 'Punjabi Bagh', 'Civil Lines']
+location = st.sidebar.selectbox("Select Location", locations)
+
+# -----------------------------------
+# 📡 AQI Fetch (fixed station with fallback)
+# -----------------------------------
+@st.cache_data(ttl=300)
+def fetch_aqi_data():
+    try:
+        url = "https://api.openaq.org/v2/latest?city=Delhi&location=US+Diplomatic+Post%3A+New+Delhi&limit=100"
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        measurements = data['results'][0]['measurements']
+        df = pd.DataFrame(measurements)
+        return df
+    except:
+        # fallback data
+        return pd.DataFrame({
+            'parameter': ['pm25', 'no2', 'o3'],
+            'value': [random.randint(80, 150), random.randint(40, 80), random.randint(20, 50)],
+            'unit': ['µg/m³']*3,
+            'lastUpdated': [datetime.now().isoformat()]*3
+        })
+
+aqi_df = fetch_aqi_data()
+
+# -----------------------------------
+# 🕒 Current IST Time
+# -----------------------------------
+ist = pytz.timezone('Asia/Kolkata')
+now = datetime.now(ist)
+st.markdown(f"#### 🕒 {now.strftime('%A, %d %B %Y — %I:%M %p IST')}")
+
+# -----------------------------------
+# 🌫️ Display AQI
+# -----------------------------------
+pm25 = aqi_df[aqi_df['parameter'] == 'pm25']['value'].values
+if len(pm25) == 0:
+    st.error("⚠️ No PM2.5 data found.")
+else:
+    aqi_val = int(pm25[0])
+    st.markdown('<div class="circle"><div class="big-number">{}</div></div>'.format(aqi_val), unsafe_allow_html=True)
+    st.markdown(f"### {location} — Air Quality Index (PM2.5)")
+
+# -----------------------------------
+# 📊 Heatmap (simulated)
+# -----------------------------------
+heatmap_data = pd.DataFrame({
+    'Pollutant': selected_pollutants,
+    'AQI Value': [int(aqi_df[aqi_df['parameter'] == p]['value'].values[0]) if p in aqi_df['parameter'].values else random.randint(20, 120) for p in selected_pollutants]
+})
+
+st.subheader("🔥 Heatmap of Selected Pollutants")
+fig = px.density_heatmap(heatmap_data, x='Pollutant', y='AQI Value', color_continuous_scale='Viridis')
+st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------------------
+# 📈 Time Series Simulation
+# -----------------------------------
+st.subheader("📈 AQI Trends Over Time (Simulated)")
+ts_data = pd.DataFrame({
+    "Time": pd.date_range(end=datetime.now(), periods=10).strftime("%H:%M"),
+})
+for pol in selected_pollutants:
+    ts_data[pol] = [random.randint(30, 130) for _ in range(10)]
+
+fig2 = px.line(ts_data, x='Time', y=selected_pollutants, markers=True)
+st.plotly_chart(fig2, use_container_width=True)
+
+# -----------------------------------
+# 🧾 Footer
+# -----------------------------------
 st.markdown("---")
-
-# --- Heatmap ---
-st.subheader("🕓 24-Hour Heatmap")
-heatmap_data = df.set_index("date").resample("H").mean().fillna(method="ffill")
-fig, ax = plt.subplots(figsize=(10, 1))
-heatmap_array = heatmap_data["value"].values.reshape(1, -1)
-im = ax.imshow(heatmap_array, cmap="Reds", aspect="auto")
-ax.set_yticks([])
-ax.set_xticks(np.arange(len(heatmap_data)))
-ax.set_xticklabels([dt.strftime("%H:%M") for dt in heatmap_data.index], rotation=90)
-plt.colorbar(im, orientation="vertical", ax=ax)
-st.pyplot(fig)
-
-# --- Time Graph ---
-st.subheader(f"📊 {pollutant_choice.upper()} Trend Over Time")
-fig2, ax2 = plt.subplots(figsize=(10, 4))
-ax2.plot(df["date"], df["value"], marker="o", color="green")
-ax2.set_xlabel("Time")
-ax2.set_ylabel(f"{pollutant_choice.upper()} (µg/m³)")
-ax2.set_title(f"{pollutant_choice.upper()} Concentration Over Last 24 Hours")
-ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-fig2.autofmt_xdate()
-st.pyplot(fig2)
-
-# --- Footer ---
-st.markdown(
-    "<hr><center><small>Project by Vinam Jain · Class 12 · Modern School Barakhamba Road</small></center>",
-    unsafe_allow_html=True
-)
+st.markdown("✅ Project by **Vinam Jain**, Class 12, Modern School Barakhamba Road.")
