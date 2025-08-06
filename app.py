@@ -1,99 +1,124 @@
+# streamlit_app.py
+
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+import datetime
 import matplotlib.pyplot as plt
-import datetime as dt
-from streamlit_option_menu import option_menu
+import matplotlib.dates as mdates
 
-# Fake fallback AQI data for Chandni Chowk
-def load_fallback_data():
-    now = dt.datetime.now()
-    hours = [now - dt.timedelta(hours=i) for i in range(24)][::-1]
-    data = {
-        "datetime": hours,
-        "PM2.5": np.random.randint(80, 150, 24),
-        "NO2": np.random.randint(30, 90, 24),
-        "O3": np.random.randint(10, 50, 24),
-        "CO": np.round(np.random.uniform(0.5, 2.0, 24), 2),
-        "SO2": np.random.randint(10, 40, 24),
-    }
-    return pd.DataFrame(data)
+# --- Config ---
+st.set_page_config(page_title="Delhi AQI Dashboard", layout="wide")
 
-df = load_fallback_data()
+# --- Sidebar ---
+st.sidebar.title("🔧 Controls")
+pollutant_choice = st.sidebar.selectbox("Select Pollutant", ["pm25", "no2", "o3"])
+theme = st.sidebar.radio("Theme", ["Dark", "Light"])
+location_display = st.sidebar.selectbox("Location", ["Chandni Chowk", "Anand Vihar", "RK Puram (simulated)"])
 
-# Sidebar configuration
-st.set_page_config(layout="wide", page_title="Delhi AQI Dashboard")
-
-with st.sidebar:
-    st.title("🧭 Navigation")
-    location = st.selectbox("📍 Select Location", ["Chandni Chowk", "Anand Vihar", "R K Puram", "Punjabi Bagh", "Mandir Marg"])
-    pollutant = st.selectbox("💨 Select Pollutant", ["PM2.5", "NO2", "O3", "CO", "SO2"])
-    theme = st.radio("🌓 Theme", ["Light", "Dark"])
-
-# Apply theme colors
+# --- Style ---
 if theme == "Dark":
     st.markdown(
         """
         <style>
-        body, .stApp {
-            background-color: #1E1E1E;
-            color: white;
-        }
+        body { background-color: #1e1e1e; color: white; }
+        .main { background-color: #1e1e1e; }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
-# AQI background banner
+# --- AQI Data Setup ---
+FIXED_LOCATION = "Anand Vihar"
+API_URL = "https://api.openaq.org/v2/measurements"
+
+params = {
+    "city": "Delhi",
+    "location": FIXED_LOCATION,
+    "parameter": pollutant_choice,
+    "limit": 100,
+    "sort": "desc",
+    "order_by": "datetime"
+}
+
+try:
+    r = requests.get(API_URL, params=params)
+    data = r.json()["results"]
+    df = pd.DataFrame(data)
+    df["date"] = pd.to_datetime(df["date"]["utc"].apply(lambda x: x))
+    df.sort_values("date", inplace=True)
+except:
+    # Fallback simulated data
+    df = pd.DataFrame({
+        "date": pd.date_range(end=pd.Timestamp.now(), periods=24, freq="H"),
+        "value": np.random.randint(20, 80, size=24)
+    })
+
+# --- Centered AQI ---
+latest_aqi = int(df["value"].iloc[-1]) if not df.empty else 0
+
+st.markdown("""
+    <style>
+        .aqi-box {
+            margin-top: 20px;
+            font-size: 60px;
+            font-weight: bold;
+            color: red;
+            background-color: white;
+            border-radius: 50%;
+            width: 120px;
+            height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: auto;
+            margin-right: auto;
+            box-shadow: 0px 0px 15px rgba(255,0,0,0.4);
+            animation: pop 1s ease-in-out;
+        }
+        @keyframes pop {
+            0% { transform: scale(0.7); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+    </style>
+    <div class="aqi-box">{}</div>
+""".format(latest_aqi), unsafe_allow_html=True)
+
+# --- Date & Time (IST) ---
+ist_now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
 st.markdown(
-    """
-    <div style="background-image: linear-gradient(to right, #1a936f, #114b5f); padding: 20px; border-radius: 10px; text-align:center">
-        <h1 style="color:white">🌀 Delhi Air Quality Dashboard</h1>
-        <p style="color:white">Simulated real-time data from Chandni Chowk • Static fallback enabled</p>
-    </div>
-    """,
-    unsafe_allow_html=True
+    f"<div style='text-align:right; font-size:16px;'>🕒 {ist_now.strftime('%A, %d %B %Y | %I:%M %p')} IST</div>",
+    unsafe_allow_html=True,
 )
 
-# Date and time display
-now = dt.datetime.now().strftime("%A, %d %B %Y | %I:%M %p")
-st.markdown(f"<p style='text-align:right;font-size:16px;'>🕒 {now}</p>", unsafe_allow_html=True)
-
-# Show AQI card
 st.markdown("---")
-current_value = df[pollutant].iloc[-1]
-st.markdown(f"""
-<div style="display: flex; justify-content: center;">
-    <div style="background-color: #f4f4f4; padding: 25px 50px; border-radius: 50px; text-align: center; box-shadow: 2px 2px 10px #ccc;">
-        <h2 style="margin: 0;">{pollutant}</h2>
-        <h1 style="margin: 5px 0; color: #d7263d;">{current_value}</h1>
-        <p style="margin: 0;">Current AQI Level</p>
-    </div>
-</div>
-""", unsafe_allow_html=True)
 
-# Heatmap section
-st.markdown("### 🔥 24-Hour Heatmap")
-pivot_df = df[["datetime", pollutant]]
-pivot_df["Hour"] = pivot_df["datetime"].dt.strftime("%H:%M")
-pivot_df = pivot_df.set_index("Hour").drop("datetime", axis=1).T
-
-fig, ax = plt.subplots(figsize=(12, 2))
-im = ax.imshow(pivot_df, cmap="Reds", aspect="auto")
-ax.set_yticks([0])
-ax.set_yticklabels([pollutant])
-ax.set_xticks(range(24))
-ax.set_xticklabels(pivot_df.columns, rotation=90)
-plt.colorbar(im, ax=ax, orientation='vertical')
+# --- Heatmap ---
+st.subheader("🕓 24-Hour Heatmap")
+heatmap_data = df.set_index("date").resample("H").mean().fillna(method="ffill")
+fig, ax = plt.subplots(figsize=(10, 1))
+heatmap_array = heatmap_data["value"].values.reshape(1, -1)
+im = ax.imshow(heatmap_array, cmap="Reds", aspect="auto")
+ax.set_yticks([])
+ax.set_xticks(np.arange(len(heatmap_data)))
+ax.set_xticklabels([dt.strftime("%H:%M") for dt in heatmap_data.index], rotation=90)
+plt.colorbar(im, orientation="vertical", ax=ax)
 st.pyplot(fig)
 
-# Line graph
-st.markdown("### 📈 Time Series")
-st.line_chart(df.set_index("datetime")[pollutant])
+# --- Time Graph ---
+st.subheader(f"📊 {pollutant_choice.upper()} Trend Over Time")
+fig2, ax2 = plt.subplots(figsize=(10, 4))
+ax2.plot(df["date"], df["value"], marker="o", color="green")
+ax2.set_xlabel("Time")
+ax2.set_ylabel(f"{pollutant_choice.upper()} (µg/m³)")
+ax2.set_title(f"{pollutant_choice.upper()} Concentration Over Last 24 Hours")
+ax2.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+fig2.autofmt_xdate()
+st.pyplot(fig2)
 
-# Footer
-st.markdown("---")
+# --- Footer ---
 st.markdown(
-    "<p style='text-align:center;color:gray;'>© 2025 Vinam Jain • Modern School Barakhamba Road</p>",
+    "<hr><center><small>Project by Vinam Jain · Class 12 · Modern School Barakhamba Road</small></center>",
     unsafe_allow_html=True
 )
