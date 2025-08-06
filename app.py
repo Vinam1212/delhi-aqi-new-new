@@ -1,69 +1,99 @@
 import streamlit as st
-import requests
 import pandas as pd
-import datetime
+import numpy as np
+import matplotlib.pyplot as plt
+import datetime as dt
+from streamlit_option_menu import option_menu
 
-# Fixed OpenAQ location details
-CITY_NAME = "Delhi"
-LOCATION_NAME = "RK Puram"
-PARAMETER = "pm25"
-API_KEY = "b5e603105ac2e6a269e65dd8b3659d91eadc422e602b8becd58c5ee70b867907"
-HEADERS = {"X-API-Key": API_KEY}
+# Fake fallback AQI data for Chandni Chowk
+def load_fallback_data():
+    now = dt.datetime.now()
+    hours = [now - dt.timedelta(hours=i) for i in range(24)][::-1]
+    data = {
+        "datetime": hours,
+        "PM2.5": np.random.randint(80, 150, 24),
+        "NO2": np.random.randint(30, 90, 24),
+        "O3": np.random.randint(10, 50, 24),
+        "CO": np.round(np.random.uniform(0.5, 2.0, 24), 2),
+        "SO2": np.random.randint(10, 40, 24),
+    }
+    return pd.DataFrame(data)
 
-# Fake location list for UI only
-fake_locations = ["Chandni Chowk", "Anand Vihar", "RK Puram", "Punjabi Bagh", "Civil Lines"]
+df = load_fallback_data()
 
-st.set_page_config(page_title="Delhi AQI (Live)", layout="centered", initial_sidebar_state="auto")
+# Sidebar configuration
+st.set_page_config(layout="wide", page_title="Delhi AQI Dashboard")
 
+with st.sidebar:
+    st.title("🧭 Navigation")
+    location = st.selectbox("📍 Select Location", ["Chandni Chowk", "Anand Vihar", "R K Puram", "Punjabi Bagh", "Mandir Marg"])
+    pollutant = st.selectbox("💨 Select Pollutant", ["PM2.5", "NO2", "O3", "CO", "SO2"])
+    theme = st.radio("🌓 Theme", ["Light", "Dark"])
+
+# Apply theme colors
+if theme == "Dark":
+    st.markdown(
+        """
+        <style>
+        body, .stApp {
+            background-color: #1E1E1E;
+            color: white;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+# AQI background banner
 st.markdown(
-    "<h1 style='text-align: center; color: white;'>🟫 Delhi AQI: <span style='color:#ffcc00;'>Chandni Chowk (Live)</span></h1>",
-    unsafe_allow_html=True,
+    """
+    <div style="background-image: linear-gradient(to right, #1a936f, #114b5f); padding: 20px; border-radius: 10px; text-align:center">
+        <h1 style="color:white">🌀 Delhi Air Quality Dashboard</h1>
+        <p style="color:white">Simulated real-time data from Chandni Chowk • Static fallback enabled</p>
+    </div>
+    """,
+    unsafe_allow_html=True
 )
 
-# Simulate location dropdown
-user_location = st.selectbox("Select location in Delhi (simulated):", fake_locations, index=0)
+# Date and time display
+now = dt.datetime.now().strftime("%A, %d %B %Y | %I:%M %p")
+st.markdown(f"<p style='text-align:right;font-size:16px;'>🕒 {now}</p>", unsafe_allow_html=True)
 
-# --- Fetch live data function ---
-def fetch_aqi():
-    try:
-        url = f"https://api.openaq.org/v2/latest?city={CITY_NAME}&location={LOCATION_NAME}&parameter={PARAMETER}"
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code == 200:
-            data = response.json()
-            if data["results"]:
-                return data["results"][0]["measurements"][0]["value"]
-    except:
-        pass
-    return None
+# Show AQI card
+st.markdown("---")
+current_value = df[pollutant].iloc[-1]
+st.markdown(f"""
+<div style="display: flex; justify-content: center;">
+    <div style="background-color: #f4f4f4; padding: 25px 50px; border-radius: 50px; text-align: center; box-shadow: 2px 2px 10px #ccc;">
+        <h2 style="margin: 0;">{pollutant}</h2>
+        <h1 style="margin: 5px 0; color: #d7263d;">{current_value}</h1>
+        <p style="margin: 0;">Current AQI Level</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-# --- AQI Data ---
-aqi_value = fetch_aqi()
-if aqi_value is None:
-    aqi_value = 110  # fallback value if API fails
-    st.warning("⚠️ Showing simulated AQI due to OpenAQ API issue.")
+# Heatmap section
+st.markdown("### 🔥 24-Hour Heatmap")
+pivot_df = df[["datetime", pollutant]]
+pivot_df["Hour"] = pivot_df["datetime"].dt.strftime("%H:%M")
+pivot_df = pivot_df.set_index("Hour").drop("datetime", axis=1).T
 
-# --- AQI display ---
-st.metric(label=f"PM2.5 AQI at {user_location}", value=f"{aqi_value} µg/m³")
+fig, ax = plt.subplots(figsize=(12, 2))
+im = ax.imshow(pivot_df, cmap="Reds", aspect="auto")
+ax.set_yticks([0])
+ax.set_yticklabels([pollutant])
+ax.set_xticks(range(24))
+ax.set_xticklabels(pivot_df.columns, rotation=90)
+plt.colorbar(im, ax=ax, orientation='vertical')
+st.pyplot(fig)
 
-# --- Interpretation ---
-def interpret_aqi(pm25):
-    if pm25 <= 50:
-        return "🟩 Good"
-    elif pm25 <= 100:
-        return "🟨 Moderate"
-    elif pm25 <= 150:
-        return "🟧 Unhealthy for Sensitive Groups"
-    elif pm25 <= 200:
-        return "🟥 Unhealthy"
-    elif pm25 <= 300:
-        return "🟪 Very Unhealthy"
-    else:
-        return "🟥 Hazardous"
+# Line graph
+st.markdown("### 📈 Time Series")
+st.line_chart(df.set_index("datetime")[pollutant])
 
-st.info(f"**Air Quality Level:** {interpret_aqi(aqi_value)}")
-
-# --- Footer ---
+# Footer
+st.markdown("---")
 st.markdown(
-    "<hr><center><sub>This project was made by <strong>Vinam Jain</strong>, a high school student at Modern School, Barakhamba Road.<br>Built using live data from OpenAQ API with Streamlit.</sub></center>",
-    unsafe_allow_html=True,
+    "<p style='text-align:center;color:gray;'>© 2025 Vinam Jain • Modern School Barakhamba Road</p>",
+    unsafe_allow_html=True
 )
